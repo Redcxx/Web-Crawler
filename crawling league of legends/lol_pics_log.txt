@@ -1,0 +1,4 @@
+=============================================================
+Error while attemp to retrieve Praetorian Fiddlesticks from https://ddragon.leagueoflegends.com/cdn/img/champion/splash/Fiddlesticks_9.jpg
+=============================================================
+HTTP Error 403: Forbidden
