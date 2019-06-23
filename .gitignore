@@ -105,3 +105,9 @@ venv.bak/
 
 # idea
 .idea
+
+# json
+crawling zhihu/answer.json
+
+# pics
+lol_champs_pics/*
