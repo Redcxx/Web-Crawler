@@ -12,11 +12,12 @@ sls = os.linesep
 ans_page_error = 0
 ans_topic_error = 0
 topic_error = 0
+dup = 0
+finished = False
 # constants
 database = 'zhihu'
-collection = 'answers'
+collection = 'new_answers'
 votes_lowerbound = 1000
-
 # replace later
 username = ''
 password = ''
@@ -66,7 +67,7 @@ def get_topics():
     return result
 
 def get_answers_by_page(topic_id, page):
-    global db, collection, votes_lowerbound
+    global db, collection, votes_lowerbound, dup
     offset = (page - 1) * 10
     url = 'https://www.zhihu.com/api/v4/topics/{}/feeds/essence?include=data%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Danswer%29%5D.target.content%2Crelationship.is_authorized%2Cis_author%2Cvoting%2Cis_thanked%2Cis_nothelp%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Danswer%29%5D.target.is_normal%2Ccomment_count%2Cvoteup_count%2Ccontent%2Crelevant_info%2Cexcerpt.author.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Darticle%29%5D.target.content%2Cvoteup_count%2Ccomment_count%2Cvoting%2Cauthor.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Dpeople%29%5D.target.answer_count%2Carticles_count%2Cgender%2Cfollower_count%2Cis_followed%2Cis_following%2Cbadge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Danswer%29%5D.target.annotation_detail%2Ccontent%2Chermes_label%2Cis_labeled%2Crelationship.is_authorized%2Cis_author%2Cvoting%2Cis_thanked%2Cis_nothelp%3Bdata%5B%3F%28target.type%3Danswer%29%5D.target.author.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Darticle%29%5D.target.annotation_detail%2Ccontent%2Chermes_label%2Cis_labeled%2Cauthor.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dquestion%29%5D.target.annotation_detail%2Ccomment_count%3B&limit=10&offset={}'.format(topic_id, offset)
     headers = {
@@ -93,7 +94,7 @@ def get_answers_by_page(topic_id, page):
     return stop
 
 def get_answers_by_topic(topic_id, start_num=1):
-    global ans_page_error, sls
+    global ans_page_error, sls, current_topic
     page_num = start_num
     while True:
         print("id", topic_id, "page", page_num)
@@ -111,9 +112,8 @@ def get_answers_by_topic(topic_id, start_num=1):
             break
         page_num += 1
 
-
 def get_all_answers_from_topics(topics):
-    global ans_topic_error, ans_page_error, topic_error
+    global ans_topic_error, ans_page_error, topic_error, dup
     total = len(topics)
     for index, id in enumerate(topics):
         print("Collecting answers from id "+ str(id) + " ", end='')
@@ -126,25 +126,29 @@ def get_all_answers_from_topics(topics):
                 log.write('===============================================================' + sls)
                 log.write('Unhandled error while getting answers from topic id: ' + str(id) + sls)
                 log.write(str(e) + sls)
-    print("topic error:" + str(topic_error) + " answer page error: " + str(ans_page_error) + " answer topic error: " + str(ans_topic_error))
+    print("topic error:" + str(topic_error) + " answer page error: " + str(ans_page_error) + " answer topic error: " + str(ans_topic_error) + ' duplicates: ' + str(dup))
     print("Finished. saved in mongodb > "+ database +" > "+ collection)
 
 ### use this method to continue crawling if you have ended unexpectedly
 def recover_from_topic_and_page(topic_id, page_num):
     topics = get_topics()
-    topics = topics[topics.index(topic_id)+1:]
+    topics = topics[topics.index(str(topic_id)):]
     print("Recovering from topic", topic_id, "page", page_num)
     get_answers_by_topic(topic_id, page_num)
     print("finished with topic", topic_id)
     print("Restarting")
     get_all_answers_from_topics(topics)
 
-def get_answers_by_len(length=50):
+def sort_by_votes(line):
+    return int(line.split()[0])
+
+def query_answers_by_len(filename, length=50):
     answers = db[collection].aggregate([
     {'$addFields': {'answer_len': {'$strLenCP': '$target.content'}}},
     {'$match': {'answer_len': {'$lte': length}}}
     ])
     count = 0
+    results = []
     for answer in answers:
         votes = answer['target']['voteup_count']
         content = answer['target']['content']
@@ -152,23 +156,34 @@ def get_answers_by_len(length=50):
         question = answer['target']['question']['title']
         content = bs(content, 'html.parser').text
         res = str(votes) + " " + question + " " + author + " " + content + " " + sls
-        with open('res.txt', encoding='utf-8', mode='a') as writer:
-            writer.write(res)
-        count += 1
-    print('done. total', count)
+        if res not in results:
+            results.append(res)
+            count += 1
+    results.sort(key=sort_by_votes)
+    with open(filename, encoding='utf-8', mode='w') as writer:
+        for result in results:
+            writer.write(result)
+    print('done. total', count, '=>', filename)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--crawl', help=('crawl answer >= ' + str(votes_lowerbound) +' votes on zhihu and save to mongo db'), action='store_true', dest='crawl')
-    parser.add_argument('--query', help='extract answer which length is <= 50', action='store_true', dest='query')
+    parser.add_argument('--query', help='extract answer which length is <= 50', dest='query', nargs=1)
+    args = parser.parse_args()
 
     username = input('Enter your Mongodb username: ').strip()
     password = getpass.getpass(prompt='Enter your Mongodb password: ')
-    client = pymongo.MongoClient("mongodb+srv://" + username' + ":" + password + "@dbcluster-iaoeo.mongodb.net/test?retryWrites=true&w=majority")
+    head="mongodb+srv://"
+    tail= "@dbcluster-iaoeo.mongodb.net/test?retryWrites=true&w=majority"
+    client = pymongo.MongoClient(head + username + ":" + password + tail)
     db = client[database]
 
-    args = parser.parse_args()
     if args.crawl:
         get_all_answers_from_topics(get_topics())
     if args.query:
-        get_answers_by_len()
+        try:
+            query_answers_by_len(args.query[0])
+        except Exception as e:
+            print(e)
+            print('Please provide arguments as --query <filename>')

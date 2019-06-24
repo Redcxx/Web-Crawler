@@ -1,6 +1,6 @@
 import requests, re, os, sys, time
 
-sys.stdout.reconfigure(encoding='utf-8') # fix unicode error when use '>' in powershell 
+# sys.stdout.reconfigure(encoding='utf-8') # fix unicode error when use '>' in powershell
 
 sls = os.linesep
 
@@ -36,7 +36,7 @@ def get_data_by_page(html):
 
 def get_all_movies():
   movie_num = 0
-  for page_num in range(1,11): # 10 pages for 100 movies
+  for page_num in range(1,11): # from 1 to 10 inclusive, 10 movies per page
     datas = get_data_by_page(get_page(page_num))
     if datas:
       for movie in datas:
