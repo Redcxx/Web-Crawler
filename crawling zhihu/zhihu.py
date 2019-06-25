@@ -6,6 +6,7 @@ import pymongo
 import re
 import getpass
 import os
+import traceback
 from bs4 import BeautifulSoup as bs
 
 sls = os.linesep
@@ -13,10 +14,10 @@ ans_page_error = 0
 ans_topic_error = 0
 topic_error = 0
 dup = 0
-finished = False
+added_answer_ids = set()
 # constants
 database = 'zhihu'
-collection = 'new_answers'
+collection = 'answers'
 votes_lowerbound = 1000
 # replace later
 username = ''
@@ -39,6 +40,7 @@ def get_topics_by_page(page_num):
     }
     result = []
     try:
+        topic_id = ''
         respond = requests.post(url, headers=headers, data=data)
         topic_divs = json.loads(respond.content)['msg']
         for topic_div in topic_divs:
@@ -66,8 +68,11 @@ def get_topics():
         page_num += 1
     return result
 
+def get_answer_id(url):
+    return re.search('http://www.zhihu.com/api/v\d/answers/(\d+)', url).group(1)
+
 def get_answers_by_page(topic_id, page):
-    global db, collection, votes_lowerbound, dup
+    global db, collection, votes_lowerbound, added_answer_ids
     offset = (page - 1) * 10
     url = 'https://www.zhihu.com/api/v4/topics/{}/feeds/essence?include=data%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Danswer%29%5D.target.content%2Crelationship.is_authorized%2Cis_author%2Cvoting%2Cis_thanked%2Cis_nothelp%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Danswer%29%5D.target.is_normal%2Ccomment_count%2Cvoteup_count%2Ccontent%2Crelevant_info%2Cexcerpt.author.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Darticle%29%5D.target.content%2Cvoteup_count%2Ccomment_count%2Cvoting%2Cauthor.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dtopic_sticky_module%29%5D.target.data%5B%3F%28target.type%3Dpeople%29%5D.target.answer_count%2Carticles_count%2Cgender%2Cfollower_count%2Cis_followed%2Cis_following%2Cbadge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Danswer%29%5D.target.annotation_detail%2Ccontent%2Chermes_label%2Cis_labeled%2Crelationship.is_authorized%2Cis_author%2Cvoting%2Cis_thanked%2Cis_nothelp%3Bdata%5B%3F%28target.type%3Danswer%29%5D.target.author.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Darticle%29%5D.target.annotation_detail%2Ccontent%2Chermes_label%2Cis_labeled%2Cauthor.badge%5B%3F%28type%3Dbest_answerer%29%5D.topics%3Bdata%5B%3F%28target.type%3Dquestion%29%5D.target.annotation_detail%2Ccomment_count%3B&limit=10&offset={}'.format(topic_id, offset)
     headers = {
@@ -82,10 +87,14 @@ def get_answers_by_page(topic_id, page):
         answer_type = answer['target']['type']
         if answer_type != 'answer':
             continue
+        answer_id = get_answer_id(answer['target']['url'])
+        if answer_id in added_answer_ids:
+            continue
         votes_count = answer['target']['voteup_count']
         if votes_count < votes_lowerbound:
             stop = True
             break
+        added_answer_ids.add(answer_id)
         db[collection].insert_one(answer)
         print(votes_count)
 
@@ -113,10 +122,10 @@ def get_answers_by_topic(topic_id, start_num=1):
         page_num += 1
 
 def get_all_answers_from_topics(topics):
-    global ans_topic_error, ans_page_error, topic_error, dup
+    global ans_topic_error, ans_page_error, topic_error
     total = len(topics)
     for index, id in enumerate(topics):
-        print("Collecting answers from id "+ str(id) + " ", end='')
+        print("collecting answers from id "+ str(id) + " ", end='')
         print(index + 1, '/', total)
         try:
             get_answers_by_topic(id)
@@ -126,7 +135,7 @@ def get_all_answers_from_topics(topics):
                 log.write('===============================================================' + sls)
                 log.write('Unhandled error while getting answers from topic id: ' + str(id) + sls)
                 log.write(str(e) + sls)
-    print("topic error:" + str(topic_error) + " answer page error: " + str(ans_page_error) + " answer topic error: " + str(ans_topic_error) + ' duplicates: ' + str(dup))
+    print("topic error:" + str(topic_error) + " answer page error: " + str(ans_page_error) + " answer topic error: " + str(ans_topic_error))
     print("Finished. saved in mongodb > "+ database +" > "+ collection)
 
 ### use this method to continue crawling if you have ended unexpectedly
@@ -172,15 +181,24 @@ if __name__ == '__main__':
     parser.add_argument('--query', help='extract answer which length is <= 50', dest='query', nargs=1)
     args = parser.parse_args()
 
-    username = input('Enter your Mongodb username: ').strip()
-    password = getpass.getpass(prompt='Enter your Mongodb password: ')
-    head="mongodb+srv://"
-    tail= "@dbcluster-iaoeo.mongodb.net/test?retryWrites=true&w=majority"
-    client = pymongo.MongoClient(head + username + ":" + password + tail)
+    client = pymongo.MongoClient()
     db = client[database]
 
+    # if using cloud mongo database:
+    # username = input('Enter your Mongodb username: ').strip()
+    # password = getpass.getpass(prompt='Enter your Mongodb password: ')
+    # head="mongodb+srv://"
+    # tail= "@dbcluster-iaoeo.mongodb.net/test?retryWrites=true&w=majority"
+    # client = pymongo.MongoClient(head + username + ":" + password + tail)
+
     if args.crawl:
-        get_all_answers_from_topics(get_topics())
+        try:
+            get_all_answers_from_topics(get_topics())
+        except Exception as e:
+            traceback.print_exc()
+            with open('saved_ids.txt', 'w') as f:
+                f.write(str(e) + sls)
+                f.write(str(added_answer_ids))
     if args.query:
         try:
             query_answers_by_len(args.query[0])
