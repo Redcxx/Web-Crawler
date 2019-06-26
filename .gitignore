@@ -110,4 +110,4 @@ venv.bak/
 crawling zhihu/*.json
 
 # pics
-lol_champs_pics/*
+league of legends/lol_champs_pics/*
