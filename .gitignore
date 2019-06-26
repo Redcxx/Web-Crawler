@@ -107,7 +107,7 @@ venv.bak/
 .idea
 
 # json
-crawling zhihu/*.json
+zhihu/*.json
 
 # pics
 league of legends/lol_champs_pics/*
